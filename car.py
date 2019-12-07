@@ -3,9 +3,11 @@ import random
 import math
 import pygame
 
-from consts import CAR_WIDTH, CAR_HEIGHT, MAX_TICK, GasState, TurnState, MAX_SKID_POINTS
+from consts import CAR_WIDTH, CAR_HEIGHT, MAX_TICK, GasState, TurnState, MAX_SKID_POINTS, DEBUG
+from driver import Driver
 from point import Point
 from position import Position
+from sensor import Sensor
 
 MINUS_ONE = Position(
     x=Point(None, -1, 0),
@@ -41,6 +43,10 @@ def rotate_around_point_highperf(xy, radians, origin=(0, 0)):
     return qx, qy
 
 
+def sign(number):
+    return -1 if number < 0 else 1
+
+
 class Car(pygame.sprite.Sprite):
     def __init__(self, x, y, inv_resistance=0.99, power=0, r=Point(0), braking_inv_resistance=0.9):
         pygame.sprite.Sprite.__init__(self)
@@ -58,26 +64,81 @@ class Car(pygame.sprite.Sprite):
         self.image = pygame.transform.scale(self.image, (CAR_WIDTH, CAR_HEIGHT))
         self.transform = self.image
         self.rect = self.image.get_rect()
+        self.rect, self.transform = get_rect(self, self.pos)
         self.rl_skid_list = []
         self.rr_skid_list = []
+        self.driver = Driver(self)
+        self.front_sensor = Sensor(self, rotation_offset=180)
+        self.rear_sensor = Sensor(self, rotation_offset=0)
+        self.left_sensor = Sensor(self, rotation_offset=-90)
+        self.right_sensor = Sensor(self, rotation_offset=90)
 
-    def collide(self, other):
-        if self.rect.colliderect(other.rect):
-            x = Point(vel=self.pos.x.vel - other.pos.x.vel)
-            y = Point(vel=self.pos.y.vel - other.pos.y.vel)
-            r = Point(vel=self.pos.r.vel - other.pos.r.vel)
-            speed_diff = Position(x=x, y=y, r=r)
+    def perform_collision_checks(self, other_car):
+        return_val = False
+        if self.rect.colliderect(other_car.rect):
+            self.position_correction(other_car)
+            self.impulse_resolution(other_car)
 
-            self.pos -= speed_diff
-            other.pos += speed_diff
+            # self.power -= speed_diff
+            # other.power -= speed_diff
 
             self.crash_timer = self.default_crash_timer
-            other.crash_timer = other.default_crash_timer
-            return True
-        return False
+            other_car.crash_timer = other_car.default_crash_timer
+            return_val = True
+        return return_val
 
-    def update(self, tick):
+    def position_correction(self, other):
+        x_incest = ((self.rect.width/2.0) + (other.rect.width/2.0)) - abs(self.pos.x.pos - other.pos.x.pos)
+        y_not_incest = ((self.rect.height/2.0) + (other.rect.height/2.0)) - abs(self.pos.y.pos - other.pos.y.pos)
+
+        if x_incest < y_not_incest:
+            if self.pos.x.pos > other.pos.x.pos:
+                self.pos.x.pos += x_incest/2.0
+                other.pos.y.pos -= x_incest/2.0
+            else:
+                self.pos.x.pos -= x_incest/2.0
+                other.pos.x.pos += x_incest/2.0
+        else:
+            if self.pos.y.pos > other.pos.y.pos:
+                self.pos.y.pos += y_not_incest/2.0
+                other.pos.y.pos -= y_not_incest/2.0
+            else:
+                self.pos.y.pos -= y_not_incest/2.0
+                other.pos.y.pos += y_not_incest/2.0
+
+    def impulse_resolution(self, other):
+        x_vel_diff = self.pos.x.vel - other.pos.x.vel
+        y_vel_diff = self.pos.y.vel - other.pos.y.vel
+        r_vel_diff = self.pos.r.vel - other.pos.r.vel
+
+        x = Point(vel=x_vel_diff)
+        y = Point(vel=y_vel_diff)
+        r = Point(vel=r_vel_diff)
+
+        speed_diff = Position(x=x, y=y, r=r)
+        self.pos -= speed_diff
+        other.pos += speed_diff
+
+    def sensor_update(self):
+        self.front_sensor.intersects = False
+        self.left_sensor.intersects = False
+        self.rear_sensor.intersects = False
+        self.right_sensor.intersects = False
+        self.front_sensor.update()
+        self.left_sensor.update()
+        self.rear_sensor.update()
+        self.right_sensor.update()
+
+    def update(self, tick, cars):
         tick = min(tick, MAX_TICK)
+
+        for c in cars:
+            self.front_sensor.intersect(c)
+            self.left_sensor.intersect(c)
+            self.rear_sensor.intersect(c)
+            self.right_sensor.intersect(c)
+
+        self.gas_state, self.turn_state = self.driver.infer(self.gas_state, self.turn_state)
         self.crash_check()
 
         self.gas_fsm()
@@ -91,11 +152,11 @@ class Car(pygame.sprite.Sprite):
 
     def add_to_skid_list(self):
         l_rear_wheel_location = (
-            CAR_WIDTH/4,
-            CAR_HEIGHT - (CAR_HEIGHT/4)
+            CAR_WIDTH / 4,
+            CAR_HEIGHT - (CAR_HEIGHT / 4)
         )
         l_rotated_wheel_pos = rotate_around_point_highperf(
-            l_rear_wheel_location, math.radians(self.pos.r.pos), (CAR_WIDTH/2, CAR_HEIGHT/2)
+            l_rear_wheel_location, math.radians(self.pos.r.pos), (CAR_WIDTH / 2, CAR_HEIGHT / 2)
         )
         l_curr_pos = (
             l_rotated_wheel_pos[0] + self.pos.x.pos,
@@ -112,11 +173,11 @@ class Car(pygame.sprite.Sprite):
             self.rl_skid_list.append(l_curr_pos)
 
         r_rear_wheel_location = (
-            CAR_WIDTH/4 + CAR_WIDTH/2,
-            CAR_HEIGHT - (CAR_HEIGHT/4)
+            CAR_WIDTH / 4 + CAR_WIDTH / 2,
+            CAR_HEIGHT - (CAR_HEIGHT / 4)
         )
         r_rotated_wheel_pos = rotate_around_point_highperf(
-            r_rear_wheel_location, math.radians(self.pos.r.pos), (CAR_WIDTH/2, CAR_HEIGHT/2)
+            r_rear_wheel_location, math.radians(self.pos.r.pos), (CAR_WIDTH / 2, CAR_HEIGHT / 2)
         )
         r_curr_pos = (
             r_rotated_wheel_pos[0] + self.pos.x.pos,
@@ -165,7 +226,7 @@ class Car(pygame.sprite.Sprite):
 
     def apply_resistance(self):
         car_nose = (
-            CAR_WIDTH/2,
+            CAR_WIDTH / 2,
             0
         )
         rotated_car_nose = rotate_around_point_highperf(
@@ -174,7 +235,6 @@ class Car(pygame.sprite.Sprite):
 
         slip = rotated_car_nose
 
-
         pos = self.pos * Position(
             x=Point(None, self.inv_resistance, None),
             y=Point(None, self.inv_resistance, None),
@@ -182,17 +242,37 @@ class Car(pygame.sprite.Sprite):
         )
         self.pos = pos
 
-    def draw(self, screen):
-        if len(self.rl_skid_list) > 1:
-            pygame.draw.lines(screen, (0, 0, 0), False, self.rl_skid_list, 3)
-        if len(self.rr_skid_list) > 1:
-            pygame.draw.lines(screen, (0, 0, 0), False, self.rr_skid_list, 3)
-        #     last_point = self.skid_list[-1]
-        #     for i in range(0, len(self.skid_list), 2):
-        #         cur_point = self.skid_list[i]
-        #         pygame.draw.line(screen, (0, 0, 0), last_point, cur_point)
-        #         last_point = cur_point
+    def draw_car(self, screen):
         screen.blit(self.transform, self.rect)
+        if DEBUG:
+            color = pygame.Color(0, 0, 0, a=1)
+            points = [
+                self.rect.topleft,
+                self.rect.topright,
+                self.rect.bottomright,
+                self.rect.bottomleft,
+            ]
+            pygame.draw.lines(
+                screen, color, True, points, 1
+            )
+            self.front_sensor.draw(screen)
+            self.rear_sensor.draw(screen)
+            self.left_sensor.draw(screen)
+            self.right_sensor.draw(screen)
+
+    def draw_skids(self, screen):
+        # todo: alpha
+        color = pygame.Color(0, 0, 0, a=1)
+        if len(self.rl_skid_list) > 1:
+            pygame.draw.lines(
+                screen, color,
+                False, self.rl_skid_list, 3
+            )
+        if len(self.rr_skid_list) > 1:
+            pygame.draw.lines(
+                screen, color,
+                False, self.rr_skid_list, 3
+            )
 
     def __str__(self) -> str:
         return f"pos: {self.pos}"

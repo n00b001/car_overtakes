@@ -2,15 +2,16 @@ import random
 from time import sleep
 
 from car import Car
-from consts import SC_X, SC_Y, CAR_WIDTH
+from consts import SC_X, SC_Y, CAR_WIDTH, CAR_HEIGHT
 from point import Point
 
 
 def factory(cars, running):
     while running[0]:
         for x in range(0, SC_X, CAR_WIDTH * 2):
-            c = get_random_car(x + CAR_WIDTH/2, SC_Y)
-            cars.append(c)
+            c = get_random_car(x + CAR_WIDTH/2, SC_Y - CAR_HEIGHT)
+            if not any([True for car in cars if car.rect.colliderect(c.rect)]):
+                cars.append(c)
         sleep(5)
 
 

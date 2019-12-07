@@ -1,3 +1,4 @@
+from consts import DEGREES_IN_CIRCLE
 from point import Point
 
 
@@ -11,6 +12,7 @@ class Position:
         x = self.x.update(tick)
         y = self.y.update(tick)
         rot = self.r.update(tick)
+        rot.pos = rot.pos % DEGREES_IN_CIRCLE
         return Position(x=x, y=y, r=rot)
 
     def __str__(self):

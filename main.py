@@ -4,7 +4,7 @@ import pygame
 
 from car import CAR_WIDTH, CAR_HEIGHT
 from car_factory import factory, get_random_car, cleanup
-from consts import SC_X, SC_Y, FPS, GasState, TurnState
+from consts import SC_X, SC_Y, FPS, GasState, TurnState, DEBUG
 
 GAME_DISPLAY = pygame.display.set_mode((SC_X, SC_Y))
 lock = Lock()
@@ -27,9 +27,9 @@ def main():
 
     cars = []
     running = [True]
-    factory_thread = Thread(target=factory, args=(cars,running))
+    factory_thread = Thread(target=factory, args=(cars, running))
     cleanup_thread = Thread(target=cleanup, args=(cars, lock, running))
-    # factory_thread.start()
+    factory_thread.start()
     cleanup_thread.start()
     gas_state = GasState.accelerate
     turn_state = TurnState.none
@@ -43,17 +43,23 @@ def main():
                 pos = pygame.mouse.get_pos()
                 c = get_random_car(pos[0] - (CAR_WIDTH / 2), pos[1] - (CAR_HEIGHT / 2))
                 cars.append(c)
-            gas_state, turn_state = keyboard_states(event, gas_state, turn_state)
+            if DEBUG:
+                gas_state, turn_state = keyboard_states(event, gas_state, turn_state)
 
         GAME_DISPLAY.blit(background.image, background.rect)
-        for c in cars:
-            c.turn_state = turn_state
-            c.gas_state = gas_state
+        if DEBUG:
+            for c in cars:
+                c.turn_state = turn_state
+                c.gas_state = gas_state
         with lock:
             car_len = len(cars)
-            [[cars[i].collide(cars[j]) for j in range(i + 1, car_len)] for i in range(car_len)]
-        [c.update(clock.get_time()) for c in cars]
-        [c.draw(GAME_DISPLAY) for c in cars]
+            tick = clock.get_time()
+            for i in range(car_len):
+                cars[i].sensor_update()
+                for j in range(i + 1, car_len):
+                    cars[i].perform_collision_checks(cars[j])
+                cars[i].update(tick, cars)
+        [c.draw_car(GAME_DISPLAY) for c in cars]
 
         pygame.display.update()
         clock.tick(FPS)
