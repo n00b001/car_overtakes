@@ -4,7 +4,7 @@ import pygame
 
 from car import CAR_WIDTH, CAR_HEIGHT
 from car_factory import factory, get_random_car, cleanup
-from consts import SC_X, SC_Y, FPS, GasState, TurnState, DEBUG
+from consts import SC_X, SC_Y, FPS, GasState, TurnState, MAX_SKID_POINTS
 
 GAME_DISPLAY = pygame.display.set_mode((SC_X, SC_Y))
 lock = Lock()
@@ -26,9 +26,9 @@ def main():
     window_quit = False
 
     cars = []
-    running = [True]
-    factory_thread = Thread(target=factory, args=(cars, running))
-    cleanup_thread = Thread(target=cleanup, args=(cars, lock, running))
+    shared_obj = [True, True]
+    factory_thread = Thread(target=factory, args=(cars, shared_obj))
+    cleanup_thread = Thread(target=cleanup, args=(cars, lock, shared_obj))
     factory_thread.start()
     cleanup_thread.start()
     gas_state = GasState.accelerate
@@ -43,11 +43,16 @@ def main():
                 pos = pygame.mouse.get_pos()
                 c = get_random_car(pos[0] - (CAR_WIDTH / 2), pos[1] - (CAR_HEIGHT / 2))
                 cars.append(c)
-            if DEBUG:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_q:
+                    shared_obj[1] = True
+                elif event.key == pygame.K_e:
+                    shared_obj[1] = False
+            if shared_obj[1]:
                 gas_state, turn_state = keyboard_states(event, gas_state, turn_state)
 
         GAME_DISPLAY.blit(background.image, background.rect)
-        if DEBUG:
+        if shared_obj[1]:
             for c in cars:
                 c.turn_state = turn_state
                 c.gas_state = gas_state
@@ -55,15 +60,17 @@ def main():
             car_len = len(cars)
             tick = clock.get_time()
             for i in range(car_len):
-                cars[i].sensor_update()
+                cars[i].sensor_update(cars)
                 for j in range(i + 1, car_len):
                     cars[i].perform_collision_checks(cars[j])
-                cars[i].update(tick, cars)
-        [c.draw_car(GAME_DISPLAY) for c in cars]
+                cars[i].update(tick)
+        if MAX_SKID_POINTS != 0:
+            [c.draw_skids(GAME_DISPLAY) for c in cars]
+        [c.draw_car(GAME_DISPLAY, shared_obj[1]) for c in cars]
 
         pygame.display.update()
         clock.tick(FPS)
-    running[0] = False
+    shared_obj[0] = False
     pygame.quit()
     quit()
 

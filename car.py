@@ -3,17 +3,13 @@ import random
 import math
 import pygame
 
-from consts import CAR_WIDTH, CAR_HEIGHT, MAX_TICK, GasState, TurnState, MAX_SKID_POINTS, DEBUG
+from consts import CAR_WIDTH, CAR_HEIGHT, MAX_TICK, GasState, TurnState, MAX_SKID_POINTS, MAX_ANGLE, INCREMENT, SC_X, \
+    DEGREES_IN_CIRCLE
 from driver import Driver
 from point import Point
 from position import Position
 from sensor import Sensor
-
-MINUS_ONE = Position(
-    x=Point(None, -1, 0),
-    y=Point(None, -1, 0),
-    r=Point(None, -1, 0)
-)
+from util import rotate_around_point_highperf
 
 
 def get_rect(me, my_new_pos):
@@ -22,29 +18,6 @@ def get_rect(me, my_new_pos):
     rect.centerx = my_new_pos.x.pos + (CAR_WIDTH / 2.0)
     rect.centery = my_new_pos.y.pos + (CAR_HEIGHT / 2.0)
     return rect, transform
-
-
-def rotate_around_point_highperf(xy, radians, origin=(0, 0)):
-    """Rotate a point around a given point.
-
-    I call this the "high performance" version since we're caching some
-    values that are needed >1 time. It's less readable than the previous
-    function but it's faster.
-    """
-    x, y = xy
-    offset_x, offset_y = origin
-    adjusted_x = (x - offset_x)
-    adjusted_y = (y - offset_y)
-    cos_rad = math.cos(radians)
-    sin_rad = math.sin(radians)
-    qx = offset_x + cos_rad * adjusted_x + sin_rad * adjusted_y
-    qy = offset_y + -sin_rad * adjusted_x + cos_rad * adjusted_y
-
-    return qx, qy
-
-
-def sign(number):
-    return -1 if number < 0 else 1
 
 
 class Car(pygame.sprite.Sprite):
@@ -68,10 +41,21 @@ class Car(pygame.sprite.Sprite):
         self.rl_skid_list = []
         self.rr_skid_list = []
         self.driver = Driver(self)
-        self.front_sensor = Sensor(self, rotation_offset=180)
-        self.rear_sensor = Sensor(self, rotation_offset=0)
-        self.left_sensor = Sensor(self, rotation_offset=-90)
-        self.right_sensor = Sensor(self, rotation_offset=90)
+        self.sensors = [
+            Sensor(self, rotation_offset=i)
+            for i in range(-MAX_ANGLE, MAX_ANGLE + (INCREMENT - 1), INCREMENT)
+        ]
+        self.sensors += [
+            Sensor(self, rotation_offset=i)
+            for i in range(-DEGREES_IN_CIRCLE//2, DEGREES_IN_CIRCLE//2, DEGREES_IN_CIRCLE//6)
+        ]
+        self.waypoints = [
+            (int(x + CAR_WIDTH), -CAR_HEIGHT * 10) for x in range(0, SC_X, CAR_WIDTH * 2)
+        ]
+
+        # self.waypoints = [
+        #     (SC_X//2, SC_Y//2)
+        # ]
 
     def perform_collision_checks(self, other_car):
         return_val = False
@@ -79,64 +63,48 @@ class Car(pygame.sprite.Sprite):
             self.position_correction(other_car)
             self.impulse_resolution(other_car)
 
-            # self.power -= speed_diff
-            # other.power -= speed_diff
-
             self.crash_timer = self.default_crash_timer
             other_car.crash_timer = other_car.default_crash_timer
             return_val = True
         return return_val
 
     def position_correction(self, other):
-        x_incest = ((self.rect.width/2.0) + (other.rect.width/2.0)) - abs(self.pos.x.pos - other.pos.x.pos)
-        y_not_incest = ((self.rect.height/2.0) + (other.rect.height/2.0)) - abs(self.pos.y.pos - other.pos.y.pos)
+        x_incest = ((self.rect.width / 2.0) + (other.rect.width / 2.0)) - abs(self.pos.x.pos - other.pos.x.pos)
+        y_not_incest = ((self.rect.height / 2.0) + (other.rect.height / 2.0)) - abs(self.pos.y.pos - other.pos.y.pos)
 
         if x_incest < y_not_incest:
             if self.pos.x.pos > other.pos.x.pos:
-                self.pos.x.pos += x_incest/2.0
-                other.pos.y.pos -= x_incest/2.0
+                self.pos.x.pos += x_incest / 2.0
+                other.pos.y.pos -= x_incest / 2.0
             else:
-                self.pos.x.pos -= x_incest/2.0
-                other.pos.x.pos += x_incest/2.0
+                self.pos.x.pos -= x_incest / 2.0
+                other.pos.x.pos += x_incest / 2.0
         else:
             if self.pos.y.pos > other.pos.y.pos:
-                self.pos.y.pos += y_not_incest/2.0
-                other.pos.y.pos -= y_not_incest/2.0
+                self.pos.y.pos += y_not_incest / 2.0
+                other.pos.y.pos -= y_not_incest / 2.0
             else:
-                self.pos.y.pos -= y_not_incest/2.0
-                other.pos.y.pos += y_not_incest/2.0
+                self.pos.y.pos -= y_not_incest / 2.0
+                other.pos.y.pos += y_not_incest / 2.0
 
     def impulse_resolution(self, other):
-        x_vel_diff = self.pos.x.vel - other.pos.x.vel
-        y_vel_diff = self.pos.y.vel - other.pos.y.vel
-        r_vel_diff = self.pos.r.vel - other.pos.r.vel
-
-        x = Point(vel=x_vel_diff)
-        y = Point(vel=y_vel_diff)
-        r = Point(vel=r_vel_diff)
-
-        speed_diff = Position(x=x, y=y, r=r)
+        speed_diff = Position(
+            Point(vel=self.pos.x.vel - other.pos.x.vel),
+            Point(vel=self.pos.y.vel - other.pos.y.vel),
+            Point(vel=self.pos.r.vel - other.pos.r.vel)
+        )
         self.pos -= speed_diff
         other.pos += speed_diff
 
-    def sensor_update(self):
-        self.front_sensor.intersects = False
-        self.left_sensor.intersects = False
-        self.rear_sensor.intersects = False
-        self.right_sensor.intersects = False
-        self.front_sensor.update()
-        self.left_sensor.update()
-        self.rear_sensor.update()
-        self.right_sensor.update()
+    def sensor_update(self, cars: list):
+        new_list = [c.rect for c in cars if c != self]
+        for s in self.sensors:
+            s.reset()
+            s.update()
+            s.intersects = True if s.rect.collidelist(new_list) > 0 else False
 
-    def update(self, tick, cars):
+    def update(self, tick):
         tick = min(tick, MAX_TICK)
-
-        for c in cars:
-            self.front_sensor.intersect(c)
-            self.left_sensor.intersect(c)
-            self.rear_sensor.intersect(c)
-            self.right_sensor.intersect(c)
 
         self.gas_state, self.turn_state = self.driver.infer(self.gas_state, self.turn_state)
         self.crash_check()
@@ -225,16 +193,6 @@ class Car(pygame.sprite.Sprite):
             self.pos.r.acc = 0
 
     def apply_resistance(self):
-        car_nose = (
-            CAR_WIDTH / 2,
-            0
-        )
-        rotated_car_nose = rotate_around_point_highperf(
-            car_nose, math.radians(self.pos.r.pos)
-        )
-
-        slip = rotated_car_nose
-
         pos = self.pos * Position(
             x=Point(None, self.inv_resistance, None),
             y=Point(None, self.inv_resistance, None),
@@ -242,9 +200,9 @@ class Car(pygame.sprite.Sprite):
         )
         self.pos = pos
 
-    def draw_car(self, screen):
+    def draw_car(self, screen, debug):
         screen.blit(self.transform, self.rect)
-        if DEBUG:
+        if debug:
             color = pygame.Color(0, 0, 0, a=1)
             points = [
                 self.rect.topleft,
@@ -255,10 +213,9 @@ class Car(pygame.sprite.Sprite):
             pygame.draw.lines(
                 screen, color, True, points, 1
             )
-            self.front_sensor.draw(screen)
-            self.rear_sensor.draw(screen)
-            self.left_sensor.draw(screen)
-            self.right_sensor.draw(screen)
+            [s.draw(screen) for s in self.sensors]
+            for w in self.waypoints:
+                pygame.draw.circle(screen, (0, 0, 0), w, 5, 1)
 
     def draw_skids(self, screen):
         # todo: alpha
@@ -273,6 +230,16 @@ class Car(pygame.sprite.Sprite):
                 screen, color,
                 False, self.rr_skid_list, 3
             )
+
+    def get_closest_waypoint(self):
+        closest_distance = SC_X
+        closest_waypoint = None
+        for w in self.waypoints:
+            distance = abs(w[0] - self.pos.x.pos)
+            if distance < closest_distance:
+                closest_distance = distance
+                closest_waypoint = w
+        return closest_waypoint
 
     def __str__(self) -> str:
         return f"pos: {self.pos}"
